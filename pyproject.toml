@@ -1,0 +1,39 @@
+[project]
+name = "knowledge-server"
+version = "0.1.0"
+description = "Local multi-library knowledge server with Ollama-powered RAG"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "beautifulsoup4>=4.13.0",
+    "fastapi>=0.116.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.11.0",
+    "pypdf>=5.8.0",
+    "python-docx>=1.2.0",
+    "typer>=0.16.0",
+    "uvicorn>=0.35.0",
+]
+
+[project.scripts]
+knowledge-server = "knowledge_server.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+    "ruff>=0.12.0",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
