@@ -64,17 +64,25 @@ class MaintenanceService:
             database=database,
             ollama=ollama_status,
             chat_model=(
-                "ok" if self.settings.chat_model in models else "niet geïnstalleerd"
+                "ok"
+                if self._model_installed(self.settings.chat_model, models)
+                else "niet geïnstalleerd"
             ),
             embedding_model=(
                 "ok"
-                if self.settings.embedding_model in models
+                if self._model_installed(self.settings.embedding_model, models)
                 else "niet geïnstalleerd"
             ),
             ffmpeg=statuses[2],
             transcriber=statuses[3],
             disk_free_gb=round(free_gb, 1),
             disk_used_percent=round(used_percent, 1),
+        )
+
+    @staticmethod
+    def _model_installed(configured: str, installed: set[str]) -> bool:
+        return configured in installed or (
+            ":" not in configured and f"{configured}:latest" in installed
         )
 
     def backup(self, keep: int = 14) -> Path:
