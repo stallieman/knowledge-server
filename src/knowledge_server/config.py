@@ -64,6 +64,12 @@ class Settings:
         default_factory=_video_upload_path
     )
     document_upload_path: Path = field(default_factory=_document_upload_path)
+    allowed_tailscale_user: str = field(
+        default_factory=lambda: os.getenv(
+            "KNOWLEDGE_SERVER_TAILSCALE_USER",
+            "stallieman@github",
+        )
+    )
 
     def __post_init__(self) -> None:
         if not os.getenv("KNOWLEDGE_SERVER_VIDEO_UPLOADS"):

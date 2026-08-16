@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from knowledge_server.config import Settings
+from knowledge_server.maintenance import MaintenanceService
 from knowledge_server.service import KnowledgeService
 from knowledge_server.web import create_app
 
@@ -310,6 +311,15 @@ def serve(
     import uvicorn
 
     uvicorn.run(create_app(), host=host, port=port)
+
+
+@app.command()
+def backup() -> None:
+    """Create and rotate a consistent SQLite backup."""
+    settings = Settings()
+    service = KnowledgeService(settings)
+    maintenance = MaintenanceService(settings, service.ollama)
+    typer.echo(f"Backup created: {maintenance.backup()}")
 
 
 def main() -> None:

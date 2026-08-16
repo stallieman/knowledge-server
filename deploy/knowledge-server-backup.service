@@ -1,0 +1,13 @@
+[Unit]
+Description=Back up the local knowledge database
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/stallieman/projects/knowledge-server
+ExecStart=/home/stallieman/projects/knowledge-server/.venv/bin/knowledge-server backup
+Nice=15
+IOSchedulingClass=idle
+Environment=KNOWLEDGE_SERVER_DB=/home/stallieman/projects/knowledge-server/data/knowledge.db
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0077

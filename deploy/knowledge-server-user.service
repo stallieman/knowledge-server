@@ -20,6 +20,7 @@ Environment=KNOWLEDGE_SERVER_DB=/home/stallieman/projects/knowledge-server/data/
 Environment=KNOWLEDGE_SERVER_TRANSCRIBER_PATH=/home/stallieman/projects/local-meeting-transcriber
 Environment=KNOWLEDGE_SERVER_VIDEO_UPLOADS=/home/stallieman/projects/knowledge-server/data/video-uploads
 Environment=KNOWLEDGE_SERVER_DOCUMENT_UPLOADS=/home/stallieman/projects/knowledge-server/data/document-uploads
+Environment=KNOWLEDGE_SERVER_TAILSCALE_USER=stallieman@github
 NoNewPrivileges=yes
 PrivateTmp=yes
 RestrictRealtime=yes

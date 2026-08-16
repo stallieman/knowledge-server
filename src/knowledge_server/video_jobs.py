@@ -45,6 +45,10 @@ class VideoJobBackend(Protocol):
         analysis_type: str,
     ) -> VideoJob: ...
 
+    def cancel(self, job_id: str) -> VideoJob: ...
+    def retry(self, job_id: str) -> VideoJob: ...
+    def delete(self, job_id: str) -> None: ...
+
     def create_job_from_path(
         self,
         filename: str,
@@ -70,6 +74,8 @@ class VideoJobManager:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="video")
         self._write_lock = threading.Lock()
         self._workload_lock = workload_lock or threading.Lock()
+        self._processes: dict[str, subprocess.Popen] = {}
+        self._cancelled: set[str] = set()
         self.initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -225,6 +231,66 @@ class VideoJobManager:
                 (*values.values(), job_id),
             )
 
+    def cancel(self, job_id: str) -> VideoJob:
+        job = self.get_job(job_id)
+        if job.status not in {"queued", "processing"}:
+            raise ValueError("Alleen wachtende of actieve taken kunnen worden gestopt.")
+        self._cancelled.add(job_id)
+        process = self._processes.get(job_id)
+        if process is not None:
+            process.terminate()
+        self._update(
+            job_id,
+            status="cancelled",
+            progress="Geannuleerd.",
+            error=None,
+        )
+        return self.get_job(job_id)
+
+    def retry(self, job_id: str) -> VideoJob:
+        job = self.get_job(job_id)
+        if job.status not in {"failed", "cancelled"}:
+            raise ValueError("Alleen mislukte of geannuleerde taken kunnen opnieuw.")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT input_path FROM video_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        if row is None or not Path(row["input_path"]).is_file():
+            raise ValueError("Het oorspronkelijke videobestand bestaat niet meer.")
+        self._cancelled.discard(job_id)
+        self._update(
+            job_id,
+            status="queued",
+            progress="Wacht op verwerking.",
+            error=None,
+        )
+        self._executor.submit(self._run, job_id)
+        return self.get_job(job_id)
+
+    def delete(self, job_id: str) -> None:
+        job = self.get_job(job_id)
+        if job.status in {"queued", "processing"}:
+            raise ValueError("Stop de actieve taak voordat je deze verwijdert.")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT input_path FROM video_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            connection.execute("DELETE FROM video_jobs WHERE id = ?", (job_id,))
+        if row is not None:
+            input_path = Path(row["input_path"])
+            if input_path.is_relative_to(self.settings.video_upload_path):
+                shutil.rmtree(input_path.parent, ignore_errors=True)
+            output_dir = (
+                self.settings.transcriber_project_path
+                / "data/output/meetings"
+                / input_path.stem
+            )
+            output_root = (
+                self.settings.transcriber_project_path / "data/output/meetings"
+            )
+            if output_dir.is_relative_to(output_root):
+                shutil.rmtree(output_dir, ignore_errors=True)
+
     def _run(self, job_id: str) -> None:
         with self._connect() as connection:
             row = connection.execute(
@@ -232,12 +298,17 @@ class VideoJobManager:
             ).fetchone()
         if row is None:
             return
+        if job_id in self._cancelled:
+            return
         input_path = Path(row["input_path"])
         try:
             self._update(job_id, progress="Wacht op beschikbare AI-capaciteit…")
             with self._workload_lock:
                 self._process(job_id, row, input_path)
         except Exception as error:  # the durable job record must capture all failures
+            self._processes.pop(job_id, None)
+            if job_id in self._cancelled:
+                return
             details = str(error)
             self._update(
                 job_id,
@@ -278,6 +349,7 @@ class VideoJobManager:
                 text=True,
                 bufsize=1,
             )
+            self._processes[job_id] = process
             output_lines: list[str] = []
             if process.stdout is not None:
                 for line in process.stdout:
@@ -288,6 +360,9 @@ class VideoJobManager:
                     output_lines = output_lines[-30:]
                     self._update(job_id, progress=message[:500])
             return_code = process.wait()
+            self._processes.pop(job_id, None)
+            if job_id in self._cancelled:
+                return
             if return_code != 0:
                 raise RuntimeError("\n".join(output_lines[-12:]))
             meeting_dir = (

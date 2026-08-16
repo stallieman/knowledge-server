@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
@@ -19,6 +20,10 @@ class FakeOllama:
 
     def unload_embedding_model(self) -> None:
         pass
+
+
+async def inline_threadpool(function, *args, **kwargs):
+    return function(*args, **kwargs)
 
 
 class FakeVideoJobs:
@@ -50,6 +55,21 @@ class FakeVideoJobs:
         self.jobs.append(job)
         return job
 
+    def cancel(self, job_id: str) -> VideoJob:
+        job = next(item for item in self.jobs if item.id == job_id)
+        cancelled = VideoJob(**{**job.to_dict(), "status": "cancelled"})
+        self.jobs = [cancelled]
+        return cancelled
+
+    def retry(self, job_id: str) -> VideoJob:
+        job = next(item for item in self.jobs if item.id == job_id)
+        queued = VideoJob(**{**job.to_dict(), "status": "queued"})
+        self.jobs = [queued]
+        return queued
+
+    def delete(self, job_id: str) -> None:
+        self.jobs = [item for item in self.jobs if item.id != job_id]
+
 
 class FakeDocumentJobs:
     def __init__(self) -> None:
@@ -79,6 +99,15 @@ class FakeDocumentJobs:
         self.jobs.append(job)
         return job
 
+    def retry(self, job_id: str) -> DocumentJob:
+        job = next(item for item in self.jobs if item.id == job_id)
+        queued = DocumentJob(**{**job.to_dict(), "status": "queued"})
+        self.jobs = [queued]
+        return queued
+
+    def delete(self, job_id: str) -> None:
+        self.jobs = [item for item in self.jobs if item.id != job_id]
+
 
 async def get_json(app, path: str) -> tuple[int, object]:
     transport = httpx.ASGITransport(app=app)
@@ -105,7 +134,12 @@ def test_web_health_and_library_endpoint(tmp_path: Path) -> None:
     service = KnowledgeService(settings, ollama=FakeOllama())
     service.initialize()
     service.create_library("Linux")
-    app = create_app(settings, service=service)
+    app = create_app(
+        settings,
+        service=service,
+        video_jobs=FakeVideoJobs(),
+        document_jobs=FakeDocumentJobs(),
+    )
 
     health_status, health_payload = asyncio.run(get_json(app, "/api/health"))
     libraries_status, libraries_payload = asyncio.run(get_json(app, "/api/libraries"))
@@ -201,3 +235,41 @@ def test_web_uploads_and_lists_document_jobs(tmp_path: Path) -> None:
     assert payload["suggested_library_slug"] == "linux"
     assert list_status == 200
     assert listed == [payload]
+
+
+def test_web_chat_stream_is_saved_and_exportable(tmp_path: Path) -> None:
+    settings = Settings(database_path=tmp_path / "web.db")
+    service = KnowledgeService(settings, ollama=FakeOllama())
+    service.initialize()
+    app = create_app(
+        settings,
+        service=service,
+        video_jobs=FakeVideoJobs(),
+        document_jobs=FakeDocumentJobs(),
+    )
+
+    async def scenario() -> tuple[str, str]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            created = await client.post("/api/conversations")
+            conversation_id = created.json()["id"]
+            streamed = await client.post(
+                f"/api/conversations/{conversation_id}/stream",
+                json={"question": "Test?", "libraries": []},
+            )
+            streamed_text = streamed.text
+            await streamed.aclose()
+            exported = await client.get(
+                f"/api/conversations/{conversation_id}/export"
+            )
+        return streamed_text, exported.text
+
+    with patch("knowledge_server.web.run_in_threadpool", new=inline_threadpool):
+        streamed, exported = asyncio.run(scenario())
+
+    assert "event: chunk" in streamed
+    assert "Lokaal antwoord." in streamed
+    assert "## Jij" in exported
+    assert "## Assistent" in exported

@@ -43,6 +43,9 @@ class DocumentJobBackend(Protocol):
         library_slug: str | None,
     ) -> DocumentJob: ...
 
+    def retry(self, job_id: str) -> DocumentJob: ...
+    def delete(self, job_id: str) -> None: ...
+
 
 CATEGORY_KEYWORDS = {
     "ai-engineering": ("ai", "llm", "ollama", "embedding", "rag", "prompt"),
@@ -216,6 +219,49 @@ class DocumentJobManager:
                 (*values.values(), job_id),
             )
 
+    def retry(self, job_id: str) -> DocumentJob:
+        job = self.get_job(job_id)
+        if job.status != "failed":
+            raise ValueError("Alleen mislukte documenttaken kunnen opnieuw.")
+        source = Path(job.stored_path or "")
+        if not source.is_file():
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT staged_path FROM document_jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+            source = Path(row["staged_path"]) if row else Path()
+        if not source.is_file():
+            raise ValueError("Het oorspronkelijke document bestaat niet meer.")
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE document_jobs SET staged_path = ? WHERE id = ?",
+                (str(source), job_id),
+            )
+        self._update(
+            job_id, status="queued", progress="Wacht op indexering.", error=None
+        )
+        self._executor.submit(self._run, job_id)
+        return self.get_job(job_id)
+
+    def delete(self, job_id: str) -> None:
+        job = self.get_job(job_id)
+        if job.status in {"queued", "processing"}:
+            raise ValueError("Wacht tot de indexering klaar is.")
+        paths = [Path(value) for value in (job.stored_path,) if value]
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT staged_path FROM document_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            connection.execute("DELETE FROM document_jobs WHERE id = ?", (job_id,))
+        if row:
+            paths.append(Path(row["staged_path"]))
+        for path in paths:
+            for document in self.knowledge.list_documents():
+                if Path(document.source_path) == path:
+                    self.knowledge.delete_document(document.id)
+            if path.is_relative_to(self.settings.database_path.parent):
+                path.unlink(missing_ok=True)
+
     def _run(self, job_id: str) -> None:
         with self._connect() as connection:
             row = connection.execute(
@@ -240,14 +286,19 @@ class DocumentJobManager:
         )
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = destination_dir / f"{job_id[:8]}-{row['filename']}"
-        shutil.move(str(source), destination)
+        if source != destination:
+            if destination.exists():
+                source = destination
+            else:
+                shutil.move(str(source), destination)
+                source = destination
         self._update(
             job_id,
             status="processing",
             progress="Document indexeren…",
             stored_path=str(destination),
         )
-        report = self.knowledge.ingest(row["library_slug"], destination)
+        report = self.knowledge.ingest(row["library_slug"], source)
         self._update(
             job_id,
             status="completed",

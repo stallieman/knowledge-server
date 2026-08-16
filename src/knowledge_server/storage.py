@@ -35,6 +35,31 @@ class StoredChunk:
     embedding: list[float]
 
 
+@dataclass(frozen=True)
+class StoredDocument:
+    id: int
+    library_slug: str
+    source_path: str
+    source_name: str
+    indexed_at: str
+    chunk_count: int
+    title: str | None = None
+    summary: str | None = None
+    tags: list[str] | None = None
+
+
+@dataclass(frozen=True)
+class MetadataSuggestion:
+    id: int
+    document_id: int
+    title: str
+    summary: str
+    tags: list[str]
+    library_slug: str
+    status: str
+    created_at: str
+
+
 class KnowledgeStore:
     """SQLite persistence for libraries, documents, chunks, and embeddings."""
 
@@ -115,6 +140,34 @@ class KnowledgeStore:
                     JOIN libraries ON libraries.id = documents.library_id
                     """
                 )
+            document_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(documents)")
+            }
+            for column, definition in {
+                "title": "TEXT",
+                "summary": "TEXT",
+                "tags": "TEXT NOT NULL DEFAULT '[]'",
+            }.items():
+                if column not in document_columns:
+                    connection.execute(
+                        f"ALTER TABLE documents ADD COLUMN {column} {definition}"
+                    )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS metadata_suggestions (
+                    id INTEGER PRIMARY KEY,
+                    document_id INTEGER NOT NULL REFERENCES documents(id)
+                        ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    tags TEXT NOT NULL,
+                    library_slug TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
 
     def create_library(self, slug: str, name: str) -> Library:
         """Create a library or return the existing one."""
@@ -166,6 +219,134 @@ class KnowledgeStore:
                 (slug,),
             ).fetchone()
         return row is not None
+
+    def list_documents(self) -> list[StoredDocument]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT documents.id, libraries.slug AS library_slug,
+                       documents.source_path, documents.source_name,
+                       documents.indexed_at, COUNT(chunks.id) AS chunk_count,
+                       documents.title, documents.summary, documents.tags
+                FROM documents
+                JOIN libraries ON libraries.id = documents.library_id
+                LEFT JOIN chunks ON chunks.document_id = documents.id
+                GROUP BY documents.id
+                ORDER BY documents.indexed_at DESC
+                """
+            ).fetchall()
+        return [
+            StoredDocument(
+                id=row["id"],
+                library_slug=row["library_slug"],
+                source_path=row["source_path"],
+                source_name=row["source_name"],
+                indexed_at=row["indexed_at"],
+                chunk_count=row["chunk_count"],
+                title=row["title"],
+                summary=row["summary"],
+                tags=json.loads(row["tags"] or "[]"),
+            )
+            for row in rows
+        ]
+
+    def save_metadata_suggestion(
+        self,
+        *,
+        document_id: int,
+        title: str,
+        summary: str,
+        tags: list[str],
+        library_slug: str,
+    ) -> MetadataSuggestion:
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO metadata_suggestions(
+                    document_id, title, summary, tags, library_slug,
+                    status, created_at
+                ) VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (document_id, title, summary, json.dumps(tags), library_slug, now),
+            )
+            suggestion_id = int(cursor.lastrowid)
+        return MetadataSuggestion(
+            id=suggestion_id,
+            document_id=document_id,
+            title=title,
+            summary=summary,
+            tags=tags,
+            library_slug=library_slug,
+            status="pending",
+            created_at=now,
+        )
+
+    def approve_metadata_suggestion(self, suggestion_id: int) -> MetadataSuggestion:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM metadata_suggestions WHERE id = ?",
+                (suggestion_id,),
+            ).fetchone()
+            if row is None or row["status"] != "pending":
+                raise KeyError(f"Unknown pending suggestion: {suggestion_id}")
+            library = connection.execute(
+                "SELECT id FROM libraries WHERE slug = ?", (row["library_slug"],)
+            ).fetchone()
+            if library is None:
+                raise KeyError(f"Unknown library: {row['library_slug']}")
+            connection.execute(
+                """
+                UPDATE documents SET title = ?, summary = ?, tags = ?, library_id = ?
+                WHERE id = ?
+                """,
+                (
+                    row["title"], row["summary"], row["tags"],
+                    library["id"], row["document_id"],
+                ),
+            )
+            chunk_ids = connection.execute(
+                "SELECT id FROM chunks WHERE document_id = ?", (row["document_id"],)
+            ).fetchall()
+            connection.executemany(
+                "UPDATE chunks_fts SET library_slug = ? WHERE rowid = ?",
+                ((row["library_slug"], item["id"]) for item in chunk_ids),
+            )
+            connection.execute(
+                "UPDATE metadata_suggestions SET status = 'approved' WHERE id = ?",
+                (suggestion_id,),
+            )
+        return MetadataSuggestion(
+            id=row["id"], document_id=row["document_id"], title=row["title"],
+            summary=row["summary"], tags=json.loads(row["tags"]),
+            library_slug=row["library_slug"], status="approved",
+            created_at=row["created_at"],
+        )
+
+    def delete_document(self, document_id: int) -> StoredDocument:
+        documents = {item.id: item for item in self.list_documents()}
+        document = documents.get(document_id)
+        if document is None:
+            raise KeyError(f"Unknown document: {document_id}")
+        with self._connect() as connection:
+            chunk_ids = connection.execute(
+                "SELECT id FROM chunks WHERE document_id = ?", (document_id,)
+            ).fetchall()
+            connection.executemany(
+                "DELETE FROM chunks_fts WHERE rowid = ?",
+                ((row["id"],) for row in chunk_ids),
+            )
+            connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+        return document
+
+    def invalidate_document(self, document_id: int) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE documents SET content_hash = '' WHERE id = ?",
+                (document_id,),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(f"Unknown document: {document_id}")
 
     def document_is_current(
         self,

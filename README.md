@@ -37,6 +37,12 @@ documentchunks, embeddings en antwoorden blijven lokaal.
 - MP4-upload vanuit de webinterface met een persistente, seriële GPU-wachtrij;
 - automatische indexering van voltooide transcripties in `persoonlijke-videos`;
 - documentupload met bibliotheekkeuze of een controleerbare categorisatiesuggestie;
+- Tailscale WhoIs-toegang beperkt tot het ingestelde persoonlijke account;
+- taakbeheer met stoppen, opnieuw proberen, resultaatdownloads en verwijderen;
+- beheer van geïndexeerde documenten, inclusief preview en hercategorisatie;
+- goed te keuren Qwen-suggesties voor titel, samenvatting, tags en bibliotheek;
+- opgeslagen chatgesprekken met streaming levering, bronfragmenten en export;
+- systeemstatus, consistente SQLite-back-ups en schijfruimtebewaking;
 - LLM en embeddingmodel worden direct na gebruik uit VRAM verwijderd;
 - bescherming tegen instructies die in bronbestanden staan.
 
@@ -152,6 +158,42 @@ te grote bestanden. Geaccepteerde uploads worden onder `data/import/<bibliotheek
 bewaard en meteen geïndexeerd. Document- en videotaken delen één achtergrondslot,
 zodat hun zware AI-stappen niet gelijktijdig om GPU-geheugen concurreren.
 
+## Toegang en beveiliging
+
+De server blijft uitsluitend aan `127.0.0.1` gebonden en wordt via Tailscale Serve
+als tailnet-only HTTPS-site gepubliceerd. Bij ieder niet-lokaal verzoek valideert de
+app met Tailscale WhoIs dat het apparaat bij `KNOWLEDGE_SERVER_TAILSCALE_USER`
+hoort. Mutaties krijgen daarnaast same-origincontrole. Beveiligingsheaders en een
+begrensd lokaal auditlog zijn standaard actief.
+
+De huidige URL is:
+
+```text
+https://cachyos-x8664.tail63d252.ts.net
+```
+
+## Beheer en betrouwbaarheid
+
+De pagina **Systeem** toont database-, Ollama-, model-, FFmpeg-, transcriber- en
+schijfstatus. Een handmatige back-up kan vanuit de UI of CLI worden gemaakt:
+
+```fish
+uv run knowledge-server backup
+```
+
+Back-ups staan onder `data/backups/`; standaard blijven de veertien nieuwste
+bestanden bewaard. `deploy/knowledge-server-backup.timer` maakt dagelijks een
+consistente SQLite-back-up. Applicatielogs lopen via journald en het interne
+toegangsauditlog bewaart maximaal 5000 mutaties of geweigerde verzoeken.
+
+## Chat en documentbeheer
+
+Chatgesprekken, antwoorden en gebruikte bronfragmenten worden lokaal in SQLite
+bewaard. De interface kan gesprekken wisselen en als Markdown exporteren. Bij
+documenten zijn preview, geforceerd herindexeren, verplaatsen en gecontroleerd
+verwijderen beschikbaar. Slimme metadata blijft altijd een voorstel totdat de
+gebruiker dit expliciet goedkeurt.
+
 ## Automatisch starten na een reboot
 
 De actieve configuratie staat in `deploy/knowledge-server-user.service`. Dit is een
@@ -238,6 +280,7 @@ KNOWLEDGE_SERVER_EMBEDDING_MODEL
 KNOWLEDGE_SERVER_TRANSCRIBER_PATH
 KNOWLEDGE_SERVER_VIDEO_UPLOADS
 KNOWLEDGE_SERVER_DOCUMENT_UPLOADS
+KNOWLEDGE_SERVER_TAILSCALE_USER
 ```
 
 De standaarddatabase is `data/knowledge.db` en valt onder `.gitignore`.
