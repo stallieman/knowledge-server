@@ -17,6 +17,13 @@ def _video_upload_path() -> Path:
     return _database_path().parent / "video-uploads"
 
 
+def _document_upload_path() -> Path:
+    configured_path = os.getenv("KNOWLEDGE_SERVER_DOCUMENT_UPLOADS")
+    if configured_path:
+        return Path(configured_path).expanduser().resolve()
+    return _database_path().parent / "document-uploads"
+
+
 @dataclass(frozen=True)
 class Settings:
     """Runtime configuration, overridable through environment variables."""
@@ -56,6 +63,7 @@ class Settings:
     video_upload_path: Path = field(
         default_factory=_video_upload_path
     )
+    document_upload_path: Path = field(default_factory=_document_upload_path)
 
     def __post_init__(self) -> None:
         if not os.getenv("KNOWLEDGE_SERVER_VIDEO_UPLOADS"):
@@ -63,4 +71,10 @@ class Settings:
                 self,
                 "video_upload_path",
                 self.database_path.parent / "video-uploads",
+            )
+        if not os.getenv("KNOWLEDGE_SERVER_DOCUMENT_UPLOADS"):
+            object.__setattr__(
+                self,
+                "document_upload_path",
+                self.database_path.parent / "document-uploads",
             )

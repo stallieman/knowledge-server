@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 
 from knowledge_server.config import Settings
+from knowledge_server.document_jobs import DocumentJob
 from knowledge_server.service import KnowledgeService
 from knowledge_server.video_jobs import VideoJob
 from knowledge_server.web import create_app
@@ -43,6 +44,35 @@ class FakeVideoJobs:
             progress="Wacht op verwerking.",
             language=language,
             analysis_type=analysis_type,
+            created_at="2026-08-16T00:00:00+00:00",
+            updated_at="2026-08-16T00:00:00+00:00",
+        )
+        self.jobs.append(job)
+        return job
+
+
+class FakeDocumentJobs:
+    def __init__(self) -> None:
+        self.jobs: list[DocumentJob] = []
+
+    def list_jobs(self) -> list[DocumentJob]:
+        return self.jobs
+
+    def create_job_from_path(
+        self,
+        filename: str,
+        staged_path: Path,
+        *,
+        library_slug: str | None,
+    ) -> DocumentJob:
+        assert staged_path.read_bytes() == b"document"
+        job = DocumentJob(
+            id="document-1",
+            filename=filename,
+            status="queued",
+            progress="Wacht op indexering.",
+            library_slug=library_slug or "linux",
+            suggested_library_slug="linux",
             created_at="2026-08-16T00:00:00+00:00",
             updated_at="2026-08-16T00:00:00+00:00",
         )
@@ -140,5 +170,34 @@ def test_web_uploads_and_lists_video_jobs(tmp_path: Path) -> None:
     assert status_code == 202
     assert payload["filename"] == "meeting.mp4"
     assert payload["language"] == "nl"
+    assert list_status == 200
+    assert listed == [payload]
+
+
+def test_web_uploads_and_lists_document_jobs(tmp_path: Path) -> None:
+    settings = Settings(database_path=tmp_path / "web.db")
+    service = KnowledgeService(settings, ollama=FakeOllama())
+    service.initialize()
+    jobs = FakeDocumentJobs()
+    app = create_app(settings, service=service, document_jobs=jobs)
+
+    async def upload() -> tuple[int, dict]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            response = await client.post(
+                "/api/document-jobs",
+                params={"filename": "linux-notes.md", "library": "linux"},
+                content=b"document",
+            )
+        return response.status_code, response.json()
+
+    status_code, payload = asyncio.run(upload())
+    list_status, listed = asyncio.run(get_json(app, "/api/document-jobs"))
+
+    assert status_code == 202
+    assert payload["library_slug"] == "linux"
+    assert payload["suggested_library_slug"] == "linux"
     assert list_status == 200
     assert listed == [payload]

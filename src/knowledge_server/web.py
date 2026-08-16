@@ -1,6 +1,7 @@
 # ruff: noqa: E501
 from __future__ import annotations
 
+import threading
 import uuid
 from dataclasses import asdict
 
@@ -9,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from knowledge_server.config import Settings
+from knowledge_server.document_jobs import DocumentJobBackend, DocumentJobManager
 from knowledge_server.service import KnowledgeService
 from knowledge_server.video_jobs import VideoJobBackend, VideoJobManager
 
@@ -67,6 +69,17 @@ INDEX_HTML = """<!doctype html>
     <p id="upload-status"></p>
     <div id="jobs"></div>
   </section>
+  <section class="panel">
+    <h2>Document toevoegen</h2>
+    <p class="subtitle">Kies zelf een bibliotheek of laat de server een transparante suggestie doen.</p>
+    <div class="row">
+      <label>Document<input id="document" type="file"></label>
+      <label>Bibliotheek<select id="document-library"><option value="">Automatische suggestie</option></select></label>
+    </div>
+    <button id="upload-document">Upload en indexeer</button>
+    <p id="document-upload-status"></p>
+    <div id="document-jobs"></div>
+  </section>
   <fieldset>
     <legend>Bibliotheken</legend>
     <div id="libraries">Laden…</div>
@@ -93,6 +106,11 @@ INDEX_HTML = """<!doctype html>
     const uploadButton = document.querySelector('#upload-video');
     const uploadStatus = document.querySelector('#upload-status');
     const jobsElement = document.querySelector('#jobs');
+    const documentElement = document.querySelector('#document');
+    const documentLibrary = document.querySelector('#document-library');
+    const documentUploadButton = document.querySelector('#upload-document');
+    const documentUploadStatus = document.querySelector('#document-upload-status');
+    const documentJobsElement = document.querySelector('#document-jobs');
 
     async function loadLibraries() {
       const response = await fetch('/api/libraries');
@@ -105,8 +123,61 @@ INDEX_HTML = """<!doctype html>
         checkbox.value = library.slug;
         label.append(checkbox, ` ${library.name} (${library.document_count})`);
         librariesElement.append(label);
+        const option = document.createElement('option');
+        option.value = library.slug;
+        option.textContent = library.name;
+        documentLibrary.append(option);
       }
     }
+
+    async function loadDocumentJobs() {
+      const response = await fetch('/api/document-jobs');
+      const jobs = await response.json();
+      documentJobsElement.textContent = '';
+      for (const job of jobs) {
+        const article = document.createElement('article');
+        article.className = 'job';
+        const heading = document.createElement('strong');
+        heading.textContent = job.filename;
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = jobLabel(job.status);
+        const progress = document.createElement('div');
+        progress.textContent = `${job.progress} · ${job.library_slug}`;
+        const suggestion = document.createElement('small');
+        suggestion.textContent = `Suggestie: ${job.suggested_library_slug}`;
+        article.append(heading, ' ', badge, progress, suggestion);
+        if (job.error) {
+          const error = document.createElement('div');
+          error.className = 'error';
+          error.textContent = job.error;
+          article.append(error);
+        }
+        documentJobsElement.append(article);
+      }
+    }
+
+    documentUploadButton.addEventListener('click', async () => {
+      const file = documentElement.files[0];
+      if (!file) { documentUploadStatus.textContent = 'Kies eerst een document.'; return; }
+      documentUploadButton.disabled = true;
+      documentUploadStatus.textContent = 'Document uploaden…';
+      const params = new URLSearchParams({
+        filename: file.name, library: documentLibrary.value,
+      });
+      try {
+        const response = await fetch(`/api/document-jobs?${params}`, {
+          method: 'POST', body: file,
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || 'Upload mislukt');
+        documentUploadStatus.textContent = `In wachtrij voor ${payload.library_slug}.`;
+        documentElement.value = '';
+        await loadDocumentJobs();
+      } catch (error) {
+        documentUploadStatus.textContent = `Fout: ${error.message}`;
+      } finally { documentUploadButton.disabled = false; }
+    });
 
     function jobLabel(status) {
       return {queued: 'In wachtrij', processing: 'Bezig', completed: 'Klaar', failed: 'Mislukt'}[status] || status;
@@ -207,7 +278,9 @@ INDEX_HTML = """<!doctype html>
       librariesElement.textContent = `Bibliotheken konden niet worden geladen: ${error.message}`;
     });
     loadJobs().catch(error => { jobsElement.textContent = `Taken konden niet worden geladen: ${error.message}`; });
+    loadDocumentJobs().catch(error => { documentJobsElement.textContent = `Documenttaken konden niet worden geladen: ${error.message}`; });
     setInterval(loadJobs, 4000);
+    setInterval(loadDocumentJobs, 4000);
   </script>
 </body>
 </html>
@@ -219,13 +292,22 @@ def create_app(
     *,
     service: KnowledgeService | None = None,
     video_jobs: VideoJobBackend | None = None,
+    document_jobs: DocumentJobBackend | None = None,
 ) -> FastAPI:
     """Create the local FastAPI application."""
     resolved_settings = settings or Settings()
     knowledge_service = service or KnowledgeService(resolved_settings)
     knowledge_service.initialize()
+    workload_lock = threading.Lock()
     video_job_manager = video_jobs or VideoJobManager(
-        resolved_settings, knowledge_service
+        resolved_settings,
+        knowledge_service,
+        workload_lock=workload_lock,
+    )
+    document_job_manager = document_jobs or DocumentJobManager(
+        resolved_settings,
+        knowledge_service,
+        workload_lock=workload_lock,
     )
 
     app = FastAPI(
@@ -276,6 +358,38 @@ def create_app(
                 staged_path,
                 language=language or None,
                 analysis_type=analysis_type,
+            )
+            return job.to_dict()
+        except (FileExistsError, OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        finally:
+            staged_path.unlink(missing_ok=True)
+
+    @app.get("/api/document-jobs")
+    async def list_document_jobs() -> list[dict]:
+        return [job.to_dict() for job in document_job_manager.list_jobs()]
+
+    @app.post("/api/document-jobs", status_code=202)
+    async def create_document_job(
+        request: Request,
+        filename: str = Query(min_length=1, max_length=255),
+        library: str = Query(default="", max_length=100),
+    ) -> dict:
+        incoming_dir = resolved_settings.document_upload_path / ".incoming"
+        incoming_dir.mkdir(parents=True, exist_ok=True)
+        staged_path = incoming_dir / f"upload-{uuid.uuid4().hex}"
+        size = 0
+        try:
+            with staged_path.open("xb") as target:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 200 * 1024 * 1024:
+                        raise ValueError("Document is groter dan de limiet van 200 MB.")
+                    target.write(chunk)
+            job = document_job_manager.create_job_from_path(
+                filename,
+                staged_path,
+                library_slug=library or None,
             )
             return job.to_dict()
         except (FileExistsError, OSError, ValueError) as error:

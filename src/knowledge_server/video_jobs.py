@@ -58,11 +58,18 @@ class VideoJobBackend(Protocol):
 class VideoJobManager:
     """Persist and serially execute GPU-heavy video processing jobs."""
 
-    def __init__(self, settings: Settings, knowledge: KnowledgeService) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        knowledge: KnowledgeService,
+        *,
+        workload_lock: threading.Lock | None = None,
+    ) -> None:
         self.settings = settings
         self.knowledge = knowledge
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="video")
         self._write_lock = threading.Lock()
+        self._workload_lock = workload_lock or threading.Lock()
         self.initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -227,6 +234,25 @@ class VideoJobManager:
             return
         input_path = Path(row["input_path"])
         try:
+            self._update(job_id, progress="Wacht op beschikbare AI-capaciteit…")
+            with self._workload_lock:
+                self._process(job_id, row, input_path)
+        except Exception as error:  # the durable job record must capture all failures
+            details = str(error)
+            self._update(
+                job_id,
+                status="failed",
+                progress="Verwerking mislukt.",
+                error=details or type(error).__name__,
+            )
+
+    def _process(
+        self,
+        job_id: str,
+        row: sqlite3.Row,
+        input_path: Path,
+    ) -> None:
+        try:
             self._update(job_id, status="processing", progress="Video verwerken…")
             command = [
                 str(
@@ -285,11 +311,5 @@ class VideoJobManager:
                 summary_path=str(summary) if summary.is_file() else None,
                 error=None,
             )
-        except Exception as error:  # the durable job record must capture all failures
-            details = str(error)
-            self._update(
-                job_id,
-                status="failed",
-                progress="Verwerking mislukt.",
-                error=details or type(error).__name__,
-            )
+        finally:
+            pass

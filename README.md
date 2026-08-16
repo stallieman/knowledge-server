@@ -36,6 +36,7 @@ documentchunks, embeddings en antwoorden blijven lokaal.
 - lokale CLI en webinterface;
 - MP4-upload vanuit de webinterface met een persistente, seriële GPU-wachtrij;
 - automatische indexering van voltooide transcripties in `persoonlijke-videos`;
+- documentupload met bibliotheekkeuze of een controleerbare categorisatiesuggestie;
 - LLM en embeddingmodel worden direct na gebruik uit VRAM verwijderd;
 - bescherming tegen instructies die in bronbestanden staan.
 
@@ -139,6 +140,18 @@ De transcriber staat standaard naast dit project in
 `../local-meeting-transcriber`. Een andere locatie kan worden ingesteld met
 `KNOWLEDGE_SERVER_TRANSCRIBER_PATH`.
 
+### Document toevoegen
+
+Onder **Document toevoegen** kun je een ondersteund bestand uploaden en direct een
+bibliotheek kiezen. Met **Automatische suggestie** bepaalt de server lokaal een
+voorstel op basis van herkenbare termen in de bestandsnaam en inhoud. De gekozen en
+voorgestelde bibliotheek blijven beide zichtbaar in de takenlijst.
+
+De bestaande filters blokkeren onbekende bestandstypen, gevoelige bestandsnamen en
+te grote bestanden. Geaccepteerde uploads worden onder `data/import/<bibliotheek>/`
+bewaard en meteen geïndexeerd. Document- en videotaken delen één achtergrondslot,
+zodat hun zware AI-stappen niet gelijktijdig om GPU-geheugen concurreren.
+
 ## Automatisch starten na een reboot
 
 De actieve configuratie staat in `deploy/knowledge-server-user.service`. Dit is een
@@ -224,6 +237,7 @@ KNOWLEDGE_SERVER_CHAT_MODEL
 KNOWLEDGE_SERVER_EMBEDDING_MODEL
 KNOWLEDGE_SERVER_TRANSCRIBER_PATH
 KNOWLEDGE_SERVER_VIDEO_UPLOADS
+KNOWLEDGE_SERVER_DOCUMENT_UPLOADS
 ```
 
 De standaarddatabase is `data/knowledge.db` en valt onder `.gitignore`.
