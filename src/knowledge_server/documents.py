@@ -80,7 +80,7 @@ GENERATED_FILENAMES = frozenset(
     {"cargo.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"}
 )
 MAX_TEXT_DOCUMENT_BYTES = 2_000_000
-MAX_BINARY_DOCUMENT_BYTES = 50_000_000
+MAX_BINARY_DOCUMENT_BYTES = 250_000_000
 
 
 @dataclass(frozen=True)

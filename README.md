@@ -260,8 +260,20 @@ De volledige sectiemapping en geplande OAuth-route staan in
 Een binaire OneNote-back-up kan lokaal en herhaalbaar worden verwerkt met de
 afzonderlijke importstraat in [`docs/onenote-import.md`](docs/onenote-import.md).
 
-Een gemengd ZIP-archief met PDF's, tekst, Markdown en projectcode kan gecontroleerd
-worden gecategoriseerd via
+In het scherm **Documenten** kun je ook een ZIP-bestand uploaden. Ondersteunde
+documenten worden afzonderlijk geïndexeerd en op inhoud gecategoriseerd; MP4-video's
+gaan naar de bestaande transcriptiewachtrij. Je kunt vooraf ook één vaste categorie
+voor de hele ZIP kiezen. Padmanipulatie, versleutelde bestanden, verdachte
+compressieverhoudingen, gevoelige bestandsnamen en niet-ondersteunde typen worden
+geblokkeerd of overgeslagen. De grenzen zijn 2 GB voor de upload, 20 GB uitgepakt
+en 2.000 bestanden.
+
+De categorie-browser in hetzelfde scherm filtert de bestaande documenten. Vanuit
+die weergave kun je oude informatie verwijderen en een vervangend document direct
+aan de geselecteerde categorie toevoegen. Verwijderen blijft altijd een expliciete
+handeling met bevestiging.
+
+Voor een eenmalige, lokaal voorbereide bulkimport bestaat daarnaast de procedure in
 [`docs/reference-archive-import.md`](docs/reference-archive-import.md).
 
 Lokale Git-checkouts en later read-only gesynchroniseerde GitHub-projecten kunnen
@@ -280,6 +292,7 @@ KNOWLEDGE_SERVER_EMBEDDING_MODEL
 KNOWLEDGE_SERVER_TRANSCRIBER_PATH
 KNOWLEDGE_SERVER_VIDEO_UPLOADS
 KNOWLEDGE_SERVER_DOCUMENT_UPLOADS
+KNOWLEDGE_SERVER_ARCHIVE_UPLOADS
 KNOWLEDGE_SERVER_TAILSCALE_USER
 ```
 

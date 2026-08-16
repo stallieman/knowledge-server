@@ -24,6 +24,13 @@ def _document_upload_path() -> Path:
     return _database_path().parent / "document-uploads"
 
 
+def _archive_upload_path() -> Path:
+    configured_path = os.getenv("KNOWLEDGE_SERVER_ARCHIVE_UPLOADS")
+    if configured_path:
+        return Path(configured_path).expanduser().resolve()
+    return _database_path().parent / "archive-uploads"
+
+
 @dataclass(frozen=True)
 class Settings:
     """Runtime configuration, overridable through environment variables."""
@@ -64,6 +71,7 @@ class Settings:
         default_factory=_video_upload_path
     )
     document_upload_path: Path = field(default_factory=_document_upload_path)
+    archive_upload_path: Path = field(default_factory=_archive_upload_path)
     allowed_tailscale_user: str = field(
         default_factory=lambda: os.getenv(
             "KNOWLEDGE_SERVER_TAILSCALE_USER",
@@ -83,4 +91,10 @@ class Settings:
                 self,
                 "document_upload_path",
                 self.database_path.parent / "document-uploads",
+            )
+        if not os.getenv("KNOWLEDGE_SERVER_ARCHIVE_UPLOADS"):
+            object.__setattr__(
+                self,
+                "archive_upload_path",
+                self.database_path.parent / "archive-uploads",
             )

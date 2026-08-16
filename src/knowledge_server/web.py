@@ -17,6 +17,7 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from knowledge_server.archive_jobs import ArchiveJobBackend, ArchiveJobManager
 from knowledge_server.chat import ChatStore
 from knowledge_server.config import Settings
 from knowledge_server.document_jobs import DocumentJobBackend, DocumentJobManager
@@ -103,7 +104,17 @@ INDEX_HTML = """<!doctype html>
     <button id="upload-document">Upload en indexeer</button>
     <p id="document-upload-status"></p>
     <div id="document-jobs"></div>
+    <h3>ZIP-archief importeren</h3>
+    <p class="subtitle">Documenten worden per inhoud ingedeeld; MP4-video's gaan naar de videowachtrij.</p>
+    <div class="row">
+      <label>ZIP-bestand<input id="archive" type="file" accept=".zip,application/zip"></label>
+      <label>Bestemming<select id="archive-library"><option value="">Automatisch per document</option></select></label>
+    </div>
+    <button id="upload-archive">Upload en organiseer</button>
+    <p id="archive-upload-status"></p>
+    <div id="archive-jobs"></div>
     <h3>Geïndexeerde documenten</h3>
+    <div class="row"><label>Categorie<select id="browse-library"><option value="">Alle categorieën</option></select></label><button id="upload-to-category">Nieuw document in deze categorie</button></div>
     <div id="indexed-documents">Laden…</div>
   </section>
   <section class="panel" id="chat">
@@ -151,6 +162,11 @@ INDEX_HTML = """<!doctype html>
     const conversationElement = document.querySelector('#conversation');
     const messagesElement = document.querySelector('#messages');
     const systemHealth = document.querySelector('#system-health');
+    const archiveElement = document.querySelector('#archive');
+    const archiveLibrary = document.querySelector('#archive-library');
+    const archiveJobsElement = document.querySelector('#archive-jobs');
+    const archiveUploadStatus = document.querySelector('#archive-upload-status');
+    const browseLibrary = document.querySelector('#browse-library');
 
     async function loadLibraries() {
       const response = await fetch('/api/libraries');
@@ -167,6 +183,12 @@ INDEX_HTML = """<!doctype html>
         option.value = library.slug;
         option.textContent = library.name;
         documentLibrary.append(option);
+        for (const target of [archiveLibrary, browseLibrary]) {
+          const categoryOption = document.createElement('option');
+          categoryOption.value = library.slug;
+          categoryOption.textContent = library.name;
+          target.append(categoryOption);
+        }
       }
     }
 
@@ -225,6 +247,7 @@ INDEX_HTML = """<!doctype html>
       const documents = await response.json();
       indexedDocuments.textContent = '';
       for (const item of documents) {
+        if (browseLibrary.value && item.library_slug !== browseLibrary.value) continue;
         const article = document.createElement('article');
         article.className = 'job';
         const title = document.createElement('strong');
@@ -258,6 +281,52 @@ INDEX_HTML = """<!doctype html>
         indexedDocuments.append(article);
       }
     }
+
+    browseLibrary.addEventListener('change', loadIndexedDocuments);
+    document.querySelector('#upload-to-category').addEventListener('click', () => {
+      if (!browseLibrary.value) {
+        alert('Kies eerst een categorie.');
+        return;
+      }
+      documentLibrary.value = browseLibrary.value;
+      documentElement.click();
+    });
+
+    async function loadArchiveJobs() {
+      const jobs = await (await fetch('/api/archive-jobs')).json();
+      archiveJobsElement.textContent = '';
+      for (const job of jobs) {
+        const article = document.createElement('article');
+        article.className = 'job';
+        const title = document.createElement('strong'); title.textContent = job.filename;
+        const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = jobLabel(job.status);
+        const progress = document.createElement('div'); progress.textContent = job.progress;
+        const actions = document.createElement('div'); actions.className = 'actions';
+        actions.append(actionButton('Details', async () => {
+          const items = await (await fetch(`/api/archive-jobs/${job.id}/items`)).json();
+          alert(items.map(item => `${item.status}: ${item.source_name}${item.library_slug ? ` → ${item.library_slug}` : ''}${item.reason ? ` (${item.reason})` : ''}`).join('\\n') || 'Nog geen bestanden verwerkt.');
+        }));
+        article.append(title, ' ', badge, progress, actions);
+        if (job.error) { const error = document.createElement('div'); error.className = 'error'; error.textContent = job.error; article.append(error); }
+        archiveJobsElement.append(article);
+      }
+    }
+
+    document.querySelector('#upload-archive').addEventListener('click', async () => {
+      const file = archiveElement.files[0];
+      if (!file) { archiveUploadStatus.textContent = 'Kies eerst een ZIP-bestand.'; return; }
+      const button = document.querySelector('#upload-archive');
+      button.disabled = true; archiveUploadStatus.textContent = 'ZIP uploaden…';
+      const params = new URLSearchParams({filename: file.name, library: archiveLibrary.value});
+      try {
+        const response = await fetch(`/api/archive-jobs?${params}`, {method: 'POST', body: file});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || 'ZIP-upload mislukt');
+        archiveUploadStatus.textContent = 'ZIP staat in de verwerkingswachtrij.';
+        archiveElement.value = ''; await loadArchiveJobs();
+      } catch (error) { archiveUploadStatus.textContent = `Fout: ${error.message}`; }
+      finally { button.disabled = false; }
+    });
 
     documentUploadButton.addEventListener('click', async () => {
       const file = documentElement.files[0];
@@ -493,8 +562,10 @@ INDEX_HTML = """<!doctype html>
     loadIndexedDocuments().catch(error => { indexedDocuments.textContent = error.message; });
     loadConversations().catch(error => { messagesElement.textContent = error.message; });
     loadSystemHealth().catch(error => { systemHealth.textContent = error.message; });
+    loadArchiveJobs().catch(error => { archiveJobsElement.textContent = error.message; });
     setInterval(loadJobs, 4000);
     setInterval(loadDocumentJobs, 4000);
+    setInterval(loadArchiveJobs, 4000);
   </script>
 </body>
 </html>
@@ -507,6 +578,7 @@ def create_app(
     service: KnowledgeService | None = None,
     video_jobs: VideoJobBackend | None = None,
     document_jobs: DocumentJobBackend | None = None,
+    archive_jobs: ArchiveJobBackend | None = None,
 ) -> FastAPI:
     """Create the local FastAPI application."""
     resolved_settings = settings or Settings()
@@ -527,12 +599,18 @@ def create_app(
         knowledge_service,
         workload_lock=workload_lock,
     )
+    archive_job_manager = archive_jobs or ArchiveJobManager(
+        resolved_settings.database_path,
+        resolved_settings.archive_upload_path,
+        document_job_manager,
+        video_job_manager,
+    )
     maintenance = MaintenanceService(resolved_settings, knowledge_service.ollama)
     chat_store = ChatStore(resolved_settings.database_path)
 
     app = FastAPI(
         title="Lokale kennisserver",
-        version="0.2.0",
+        version="0.3.0",
         docs_url="/api/docs",
         redoc_url=None,
     )
@@ -708,6 +786,47 @@ def create_app(
     @app.get("/api/document-jobs")
     async def list_document_jobs() -> list[dict]:
         return [job.to_dict() for job in document_job_manager.list_jobs()]
+
+    @app.get("/api/archive-jobs")
+    async def list_archive_jobs() -> list[dict]:
+        return [job.to_dict() for job in archive_job_manager.list_jobs()]
+
+    @app.get("/api/archive-jobs/{job_id}/items")
+    async def archive_job_items(job_id: str) -> list[dict]:
+        return archive_job_manager.items(job_id)
+
+    @app.post("/api/archive-jobs", status_code=202)
+    async def create_archive_job(
+        request: Request,
+        filename: str = Query(min_length=1, max_length=255),
+        library: str = Query(default="", max_length=100),
+    ) -> dict:
+        known_libraries = {
+            item.slug for item in knowledge_service.list_libraries()
+        }
+        if library and library not in known_libraries:
+            raise HTTPException(status_code=400, detail="Onbekende categorie.")
+        incoming_dir = resolved_settings.archive_upload_path / ".incoming"
+        incoming_dir.mkdir(parents=True, exist_ok=True)
+        staged_path = incoming_dir / f"upload-{uuid.uuid4().hex}"
+        size = 0
+        try:
+            with staged_path.open("xb") as target:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 2 * 1024 * 1024 * 1024:
+                        raise ValueError("ZIP is groter dan de limiet van 2 GB.")
+                    target.write(chunk)
+            job = archive_job_manager.create_job_from_path(
+                filename,
+                staged_path,
+                library_slug=library or None,
+            )
+            return job.to_dict()
+        except (FileExistsError, OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        finally:
+            staged_path.unlink(missing_ok=True)
 
     @app.get("/api/documents")
     async def indexed_documents() -> list[dict]:
