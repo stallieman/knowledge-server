@@ -5,6 +5,7 @@ import httpx
 
 from knowledge_server.config import Settings
 from knowledge_server.service import KnowledgeService
+from knowledge_server.video_jobs import VideoJob
 from knowledge_server.web import create_app
 
 
@@ -17,6 +18,36 @@ class FakeOllama:
 
     def unload_embedding_model(self) -> None:
         pass
+
+
+class FakeVideoJobs:
+    def __init__(self) -> None:
+        self.jobs: list[VideoJob] = []
+
+    def list_jobs(self) -> list[VideoJob]:
+        return self.jobs
+
+    def create_job_from_path(
+        self,
+        filename: str,
+        staged_path: Path,
+        *,
+        language: str | None,
+        analysis_type: str,
+    ) -> VideoJob:
+        assert staged_path.read_bytes() == b"video"
+        job = VideoJob(
+            id="job-1",
+            filename=filename,
+            status="queued",
+            progress="Wacht op verwerking.",
+            language=language,
+            analysis_type=analysis_type,
+            created_at="2026-08-16T00:00:00+00:00",
+            updated_at="2026-08-16T00:00:00+00:00",
+        )
+        self.jobs.append(job)
+        return job
 
 
 async def get_json(app, path: str) -> tuple[int, object]:
@@ -77,3 +108,37 @@ def test_web_uses_model_fallback_without_libraries(tmp_path: Path) -> None:
     )
 
     assert status_code == 200
+
+
+def test_web_uploads_and_lists_video_jobs(tmp_path: Path) -> None:
+    settings = Settings(database_path=tmp_path / "web.db")
+    service = KnowledgeService(settings, ollama=FakeOllama())
+    service.initialize()
+    jobs = FakeVideoJobs()
+    app = create_app(settings, service=service, video_jobs=jobs)
+
+    async def upload() -> tuple[int, dict]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            response = await client.post(
+                "/api/video-jobs",
+                params={
+                    "filename": "meeting.mp4",
+                    "language": "nl",
+                    "analysis_type": "meeting",
+                },
+                content=b"video",
+                headers={"Content-Type": "video/mp4"},
+            )
+        return response.status_code, response.json()
+
+    status_code, payload = asyncio.run(upload())
+    list_status, listed = asyncio.run(get_json(app, "/api/video-jobs"))
+
+    assert status_code == 202
+    assert payload["filename"] == "meeting.mp4"
+    assert payload["language"] == "nl"
+    assert list_status == 200
+    assert listed == [payload]

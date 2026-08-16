@@ -10,6 +10,13 @@ def _database_path() -> Path:
     return Path(configured_path).expanduser().resolve()
 
 
+def _video_upload_path() -> Path:
+    configured_path = os.getenv("KNOWLEDGE_SERVER_VIDEO_UPLOADS")
+    if configured_path:
+        return Path(configured_path).expanduser().resolve()
+    return _database_path().parent / "video-uploads"
+
+
 @dataclass(frozen=True)
 class Settings:
     """Runtime configuration, overridable through environment variables."""
@@ -36,3 +43,24 @@ class Settings:
     request_timeout_seconds: float = 1200.0
     chunk_size_chars: int = 1800
     chunk_overlap_chars: int = 250
+    transcriber_project_path: Path = field(
+        default_factory=lambda: Path(
+            os.getenv(
+                "KNOWLEDGE_SERVER_TRANSCRIBER_PATH",
+                "../local-meeting-transcriber",
+            )
+        )
+        .expanduser()
+        .resolve()
+    )
+    video_upload_path: Path = field(
+        default_factory=_video_upload_path
+    )
+
+    def __post_init__(self) -> None:
+        if not os.getenv("KNOWLEDGE_SERVER_VIDEO_UPLOADS"):
+            object.__setattr__(
+                self,
+                "video_upload_path",
+                self.database_path.parent / "video-uploads",
+            )

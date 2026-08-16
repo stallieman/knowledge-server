@@ -17,6 +17,8 @@ TasksMax=64
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 Environment=KNOWLEDGE_SERVER_DB=/home/stallieman/projects/knowledge-server/data/knowledge.db
+Environment=KNOWLEDGE_SERVER_TRANSCRIBER_PATH=/home/stallieman/projects/local-meeting-transcriber
+Environment=KNOWLEDGE_SERVER_VIDEO_UPLOADS=/home/stallieman/projects/knowledge-server/data/video-uploads
 NoNewPrivileges=yes
 PrivateTmp=yes
 RestrictRealtime=yes

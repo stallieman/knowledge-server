@@ -34,6 +34,8 @@ documentchunks, embeddings en antwoorden blijven lokaal.
 - zoeken in één of bewust meerdere bibliotheken;
 - transparante modelkennis-fallback als bronnen ontbreken of niets is geselecteerd;
 - lokale CLI en webinterface;
+- MP4-upload vanuit de webinterface met een persistente, seriële GPU-wachtrij;
+- automatische indexering van voltooide transcripties in `persoonlijke-videos`;
 - LLM en embeddingmodel worden direct na gebruik uit VRAM verwijderd;
 - bescherming tegen instructies die in bronbestanden staan.
 
@@ -121,6 +123,22 @@ Open daarna `http://127.0.0.1:8000`. De server bindt bewust alleen aan localhost
 Gebruik nog niet `--host 0.0.0.0`: voordat de interface op het thuisnetwerk of een
 werklaptop bereikbaar wordt, voegen we authenticatie en een veilige verbinding toe.
 
+### Video transcriberen
+
+Open de webinterface, kies onder **Video transcriberen** een MP4, taal en
+analysetype en start de upload. Video's worden streaming opgeslagen onder
+`data/video-uploads/` en één voor één verwerkt, zodat Whisper en Ollama de GPU niet
+tegelijk opeisen. De takenlijst en foutstatus blijven na het sluiten van de browser
+bewaard in SQLite.
+
+Na voltooiing wordt `full_transcript_with_timestamps.md` automatisch opgenomen in
+de bibliotheek `persoonlijke-videos`. Een taak die tijdens een serverherstart actief
+was, wordt veilig als mislukt gemarkeerd en kan opnieuw worden geüpload.
+
+De transcriber staat standaard naast dit project in
+`../local-meeting-transcriber`. Een andere locatie kan worden ingesteld met
+`KNOWLEDGE_SERVER_TRANSCRIBER_PATH`.
+
 ## Automatisch starten na een reboot
 
 De actieve configuratie staat in `deploy/knowledge-server-user.service`. Dit is een
@@ -130,7 +148,9 @@ opstarten, zonder interactieve login. Modellen worden alleen op verzoek geladen 
 daarna direct weer uit RAM en VRAM verwijderd.
 
 `deploy/knowledge-server.service` is daarnaast beschikbaar als volledig geharde
-system service wanneer beheer onder `/etc/systemd/system` later gewenst is.
+system service wanneer beheer onder `/etc/systemd/system` later gewenst is. Door
+de apparaat- en mapisolatie ondersteunt die strengere variant geen GPU-transcriptie;
+gebruik voor de geïntegreerde video-interface de user service.
 
 Status en logs:
 
@@ -202,6 +222,8 @@ KNOWLEDGE_SERVER_DB
 KNOWLEDGE_SERVER_OLLAMA_URL
 KNOWLEDGE_SERVER_CHAT_MODEL
 KNOWLEDGE_SERVER_EMBEDDING_MODEL
+KNOWLEDGE_SERVER_TRANSCRIBER_PATH
+KNOWLEDGE_SERVER_VIDEO_UPLOADS
 ```
 
 De standaarddatabase is `data/knowledge.db` en valt onder `.gitignore`.
