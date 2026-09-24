@@ -30,7 +30,7 @@ documentchunks, embeddings en antwoorden blijven lokaal.
 - Reciprocal Rank Fusion (RRF) voor één ranglijst met zowel betekenis als exacte
   vaktermen, bestandsnamen en code-identifiers;
 - titel-, sectie-, onderwerp- en headingcontext in iedere embedding;
-- antwoorden via `qwen3:14b` met broncodes en bestandsregels;
+- antwoorden via `qwen3.5:9b` met broncodes en bestandsregels;
 - zoeken in één of bewust meerdere bibliotheken;
 - transparante modelkennis-fallback als bronnen ontbreken of niets is geselecteerd;
 - lokale CLI en webinterface;
@@ -52,7 +52,7 @@ nu al worden geïndexeerd.
 
 ## Installatie
 
-Vereisten: CachyOS, Ollama, `uv`, Python 3.12 en de al aanwezige `qwen3:14b`.
+Vereisten: CachyOS, Ollama, `uv`, Python 3.12 en de al aanwezige `qwen3.5:9b`.
 
 ```fish
 cd ~/projects/knowledge-server

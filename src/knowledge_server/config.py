@@ -45,7 +45,7 @@ class Settings:
     chat_model: str = field(
         default_factory=lambda: os.getenv(
             "KNOWLEDGE_SERVER_CHAT_MODEL",
-            "qwen3:14b",
+            "qwen3.5:9b",
         )
     )
     embedding_model: str = field(

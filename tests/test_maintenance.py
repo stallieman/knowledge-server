@@ -7,7 +7,7 @@ from knowledge_server.service import KnowledgeService
 
 class FakeOllama:
     def installed_models(self) -> set[str]:
-        return {"qwen3:14b", "embeddinggemma:latest"}
+        return {"qwen3.5:9b", "embeddinggemma:latest"}
 
 
 def test_backup_creates_consistent_copy(tmp_path: Path) -> None:
