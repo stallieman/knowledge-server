@@ -8,7 +8,7 @@ from knowledge_server.config import Settings
 from knowledge_server.document_jobs import DocumentJob
 from knowledge_server.service import KnowledgeService
 from knowledge_server.video_jobs import VideoJob
-from knowledge_server.web import create_app
+from knowledge_server.web import create_app, render_markdown
 
 
 class FakeOllama:
@@ -119,6 +119,16 @@ async def get_json(app, path: str) -> tuple[int, object]:
     return response.status_code, response.json()
 
 
+async def get_text(app, path: str) -> tuple[int, str]:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(path)
+    return response.status_code, response.text
+
+
 async def post_json(app, path: str, payload: dict) -> tuple[int, object]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -127,6 +137,71 @@ async def post_json(app, path: str, payload: dict) -> tuple[int, object]:
     ) as client:
         response = await client.post(path, json=payload)
     return response.status_code, response.json()
+
+
+def test_web_interface_prioritizes_chat_and_hides_document_history(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(database_path=tmp_path / "web.db")
+    service = KnowledgeService(settings, ollama=FakeOllama())
+    service.initialize()
+    app = create_app(settings, service=service)
+
+    status_code, html = asyncio.run(get_text(app, "/"))
+
+    assert status_code == 200
+    assert 'id="theme-toggle"' in html
+    assert "knowledge-theme" in html
+    assert html.index('id="chat"') < html.index('id="documents"')
+    assert '<details id="document-management"' in html
+    assert "jobs.filter(job => job.status !== 'completed')" in html
+
+
+def test_markdown_is_rendered_safely() -> None:
+    rendered = render_markdown(
+        "# Plan\n\n**Belangrijk**\n\n"
+        "```sql\nSELECT * FROM users;\n```\n\n"
+        "| Stap | Status |\n|---|---|\n| 1 | Klaar |\n\n"
+        "<script>alert('nee')</script>\n\n"
+        "[onveilig](javascript:alert('nee'))\n\n"
+        "![extern](https://example.com/tracker.png)"
+    )
+
+    assert "<h1>Plan</h1>" in rendered
+    assert "<strong>Belangrijk</strong>" in rendered
+    assert '<code class="language-sql">' in rendered
+    assert "<table>" in rendered
+    assert "<script>" not in rendered
+    assert "&lt;script&gt;" in rendered
+    assert 'href="javascript:' not in rendered
+    assert "<img" not in rendered
+
+
+def test_document_preview_includes_safe_rendered_markdown(tmp_path: Path) -> None:
+    settings = Settings(database_path=tmp_path / "web.db")
+    service = KnowledgeService(settings, ollama=FakeOllama())
+    service.initialize()
+    service.create_library("Notities")
+    source = tmp_path / "bron.md"
+    source.write_text(
+        "# Leesbare bron\n\n- eerste punt\n- tweede punt\n\n"
+        "<script>alert('nee')</script>",
+        encoding="utf-8",
+    )
+    service.ingest("notities", source)
+    document = service.list_documents()[0]
+    app = create_app(settings, service=service)
+
+    status_code, payload = asyncio.run(
+        get_json(app, f"/api/documents/{document.id}/preview")
+    )
+
+    assert status_code == 200
+    assert payload["content"].startswith("# Leesbare bron")
+    assert "<h1>Leesbare bron</h1>" in payload["content_html"]
+    assert "<li>eerste punt</li>" in payload["content_html"]
+    assert "<script>" not in payload["content_html"]
+    assert "&lt;script&gt;" in payload["content_html"]
 
 
 def test_web_health_and_library_endpoint(tmp_path: Path) -> None:
@@ -270,6 +345,8 @@ def test_web_chat_stream_is_saved_and_exportable(tmp_path: Path) -> None:
         streamed, exported = asyncio.run(scenario())
 
     assert "event: chunk" in streamed
+    assert "event: rendered" in streamed
+    assert "<p>Lokaal antwoord.</p>" in streamed
     assert "Lokaal antwoord." in streamed
     assert "## Jij" in exported
     assert "## Assistent" in exported
